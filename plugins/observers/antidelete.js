@@ -1,86 +1,152 @@
-import { getCache } from '../system/cache.js'
+import { getCache } from '../../system/cache.js'
 
 const messageCache = new Map()
 
+// Cleanup cache kila dakika 5 ku-save RAM
+setInterval(() => {
+  const now = Date.now()
+  for (const [id, data] of messageCache.entries()) {
+    if (now - data.timestamp > 300000) messageCache.delete(id)
+  }
+}, 60000)
+
 export default {
   name: 'antidelete',
-  desc: 'Restore deleted messages',
+  desc: 'Restore deleted messages - Groups, DM, Status, Channels',
   category: 'automations',
 
-  // CACHE KILA MESSAGE
-  async onMessage({ msg, sender, isGroup }) {
-    const antidelete = getCache('antidelete') ?? false
-    if (!antidelete) return
-
-    const messageId = msg.key.id
-    const messageContent = msg.message
-
-    // Cache text, image, video, audio, sticker
-    if (messageContent) {
-      messageCache.set(messageId, {
-        sender,
-        isGroup,
-        content: messageContent,
-        timestamp: Date.now()
-      })
-
-      // Auto delete cache after 5 mins ku-save RAM
-      setTimeout(() => messageCache.delete(messageId), 300000)
-    }
-  },
-
-  // DETECT DELETED MESSAGE
-  async onMessageUpdate({ sock, update, t, box, settings }) {
+  async onMessageUpdate({ sock, update, settings }) {
     const antidelete = getCache('antidelete') ?? false
     if (!antidelete) return
 
     const messageId = update.key.id
-    const cached = messageCache.get(messageId)
+    const remoteJid = update.key.remoteJid
 
-    if (!cached || !update.message?.protocolMessage?.type === 0) return
-
-    const { sender, isGroup, content } = cached
-    const deletedBy = update.key.participant || update.key.remoteJid
-    const targetJid = isGroup ? update.key.remoteJid : sender
-
-    try {
-      // 1. NOTIFY
-      const notifyText = `🗑️ *Antidelete*\n\nDeleted by: @${deletedBy.split('@')[0]}\nOriginal sender: @${sender.split('@')[0]}`
+    // 1. KAMA NI MESSAGE MPYA - CACHE IT
+    if (update.message && !update.message?.protocolMessage) {
+      const sender = update.key.participant || remoteJid
+      const isGroup = remoteJid.endsWith('@g.us')
+      const isStatus = remoteJid === 'status@broadcast'
+      const isChannel = remoteJid.endsWith('@newsletter')
       
-      await sock.sendMessage(targetJid, {
-        text: notifyText,
-        mentions: [deletedBy, sender]
+      // Skip status zenye autodelete 24h - WhatsApp default
+      if (isStatus && update.message?.ephemeralMessage?.message?.contextInfo?.expiration === 86400) {
+        return
+      }
+      
+      messageCache.set(messageId, {
+        sender,
+        isGroup,
+        isStatus,
+        isChannel,
+        content: update.message,
+        timestamp: Date.now(),
+        key: update.key
       })
+      return
+    }
 
-      // 2. RESEND CONTENT
-      if (content.conversation) {
-        await sock.sendMessage(targetJid, { text: `*Recovered text:*\n${content.conversation}` })
+    // 2. KAMA NI DELETE - RESTORE
+    if (update.message?.protocolMessage?.type === 0) {
+      const cached = messageCache.get(messageId)
+      if (!cached) {
+        console.log('[ANTIDELETE] No cache found for:', messageId)
+        return
       }
+
+      const { sender, isGroup, isStatus, isChannel, content, key } = cached
+      const deletedBy = update.key.participant || update.key.remoteJid
       
-      if (content.imageMessage) {
-        const buffer = await sock.downloadMediaMessage({ message: { imageMessage: content.imageMessage } })
-        await sock.sendMessage(targetJid, { 
-          image: buffer, 
-          caption: content.imageMessage.caption || '*Recovered image*'
+      // CHOOSE TARGET JID - User custom location au default
+      const customLocation = getCache('antideleteLocation') || '' // Weka JID hapa
+      const ownerJid = getCache('ownerJid') || sock.user.id
+      let targetJid = customLocation || remoteJid
+
+      // Status: tuma kwa owner kama user haja-set location
+      if (isStatus && !customLocation) targetJid = ownerJid
+      // Channel: tuma kwa owner kama user haja-set location  
+      if (isChannel && !customLocation) targetJid = ownerJid
+
+      try {
+        // 1. NOTIFY
+        let notifyText = `🗑️ *Antidelete Alert*\n\n`
+        notifyText += `Deleted by: @${deletedBy.split('@')[0]}\n`
+        notifyText += `Original sender: @${sender.split('@')[0]}\n`
+        notifyText += `Type: ${isStatus ? 'Status' : isChannel ? 'Channel' : isGroup ? 'Group' : 'DM'}`
+
+        await sock.sendMessage(targetJid, {
+          text: notifyText,
+          mentions: [deletedBy, sender]
         })
-      }
 
-      if (content.videoMessage) {
-        const buffer = await sock.downloadMediaMessage({ message: { videoMessage: content.videoMessage } })
-        await sock.sendMessage(targetJid, { 
-          video: buffer, 
-          caption: content.videoMessage.caption || '*Recovered video*'
-        })
-      }
+        // 2. RESEND CONTENT
+        if (content.conversation) {
+          await sock.sendMessage(targetJid, { 
+            text: `*Recovered Text:*\n${content.conversation}` 
+          })
+        }
 
-      if (content.stickerMessage) {
-        const buffer = await sock.downloadMediaMessage({ message: { stickerMessage: content.stickerMessage } })
-        await sock.sendMessage(targetJid, { sticker: buffer })
-      }
+        if (content.extendedTextMessage?.text) {
+          await sock.sendMessage(targetJid, { 
+            text: `*Recovered Text:*\n${content.extendedTextMessage.text}` 
+          })
+        }
 
-      messageCache.delete(messageId)
-    } catch (e) {
-      console.log('[ANTIDELETE] Failed to restore:', e.message)
+        // IMAGE - STATUS & NORMAL
+        if (content.imageMessage || content.ephemeralMessage?.message?.imageMessage) {
+          const imgMsg = content.imageMessage || content.ephemeralMessage.message.imageMessage
+          const buffer = await sock.downloadMediaMessage({ message: { imageMessage: imgMsg }, key })
+          await sock.sendMessage(targetJid, { 
+            image: buffer, 
+            caption: imgMsg.caption || '*Recovered Image*'
+          })
+        }
+
+        // VIDEO - MP4 + STATUS
+        if (content.videoMessage || content.ephemeralMessage?.message?.videoMessage) {
+          const vidMsg = content.videoMessage || content.ephemeralMessage.message.videoMessage
+          const buffer = await sock.downloadMediaMessage({ message: { videoMessage: vidMsg }, key })
+          await sock.sendMessage(targetJid, { 
+            video: buffer, 
+            caption: vidMsg.caption || '*Recovered Video*',
+            mimetype: vidMsg.mimetype || 'video/mp4'
+          })
+        }
+
+        // AUDIO - MP3, VOICE NOTE
+        if (content.audioMessage || content.ephemeralMessage?.message?.audioMessage) {
+          const audMsg = content.audioMessage || content.ephemeralMessage.message.audioMessage
+          const buffer = await sock.downloadMediaMessage({ message: { audioMessage: audMsg }, key })
+          await sock.sendMessage(targetJid, { 
+            audio: buffer, 
+            mimetype: audMsg.mimetype || 'audio/mpeg',
+            ptt: audMsg.ptt || false
+          })
+        }
+
+        // STICKER
+        if (content.stickerMessage || content.ephemeralMessage?.message?.stickerMessage) {
+          const stkMsg = content.stickerMessage || content.ephemeralMessage.message.stickerMessage
+          const buffer = await sock.downloadMediaMessage({ message: { stickerMessage: stkMsg }, key })
+          await sock.sendMessage(targetJid, { sticker: buffer })
+        }
+
+        // DOCUMENT
+        if (content.documentMessage || content.ephemeralMessage?.message?.documentMessage) {
+          const docMsg = content.documentMessage || content.ephemeralMessage.message.documentMessage
+          const buffer = await sock.downloadMediaMessage({ message: { documentMessage: docMsg }, key })
+          await sock.sendMessage(targetJid, { 
+            document: buffer, 
+            fileName: docMsg.fileName || 'Recovered Document',
+            mimetype: docMsg.mimetype
+          })
+        }
+
+        messageCache.delete(messageId)
+        console.log(`[ANTIDELETE] Restored ${isStatus ? 'Status' : isChannel ? 'Channel' : 'Message'} ${messageId}`)
+      } catch (e) {
+        console.log('[ANTIDELETE] Failed to restore:', e.message)
+      }
     }
   }
 }
