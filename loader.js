@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { getCache } from './system/cache.js'
 import { getSettings } from './system/db.js'
+import { handleCommand } from './system/router.js' // ADDED
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -29,9 +30,65 @@ if (fs.existsSync(observerPath)) {
   console.log('[LOADER] No observers folder found at plugins/observers/')
 }
 
-// MAIN LOADER FUNCTION - NO MESSAGES.UPSERT HERE
+// MAIN LOADER FUNCTION
 export function startLoader(sock, db) {
   console.log('[LOADER] Binding observer events')
+
+  // === MESSAGES.UPSERT - COMMAND HANDLER + OBSERVERS ===
+  sock.ev.on('messages.upsert', async (m) => {
+    try {
+      const msg = m.messages[0]
+      if (!msg.message) return
+
+      const sender = msg.key.remoteJid
+      const isGroup = sender.endsWith('@g.us')
+      const body = msg.message.conversation ||
+                   msg.message.extendedTextMessage?.text ||
+                   msg.message.imageMessage?.caption ||
+                   msg.message.videoMessage?.caption || ''
+
+      // RUN OBSERVERS onMessage FIRST - NO FROM ME BLOCK
+      for (const observer of observers) {
+        if (typeof observer.onMessage === 'function') {
+          try {
+            await observer.onMessage({ sock, msg, sender, isGroup, db })
+          } catch (e) {
+            console.log(`[OBSERVER ERROR] onMessage:`, e.message)
+          }
+        }
+      }
+
+      // CHECK PREFIX
+      const prefix = getCache('prefix') || '.'
+      if (!body.startsWith(prefix)) return
+
+      // PARSE COMMAND
+      const args = body.slice(prefix.length).trim().split(/ +/)
+      const command = args.shift().toLowerCase()
+      const senderNum = (msg.key.participant || sender).split('@')[0]
+      const sudos = getCache('sudos') || []
+      const ownerJid = getCache('ownerJid') || sock.user.id
+      const ownerNum = ownerJid.split('@')[0]
+      const isOwner = senderNum === ownerNum || sudos.includes(senderNum)
+
+      console.log(`[LOADER] Command: ${command} from ${senderNum} | Owner: ${isOwner}`)
+
+      // CALL ROUTER.JS
+      await handleCommand({
+        sock,
+        msg,
+        command,
+        args,
+        sender,
+        isGroup,
+        isOwner,
+        userLang: getCache('botLanguage') || 'en'
+      })
+
+    } catch (e) {
+      console.log('[LOADER] Message handler error:', e.message)
+    }
+  })
 
   // GROUP PARTICIPANTS UPDATE - WELCOME/GOODBYE/ANTI-PROMOTE/ANTI-DEMOTE
   sock.ev.on('group-participants.update', async (update) => {
@@ -43,16 +100,16 @@ export function startLoader(sock, db) {
           await observer.run(sock, update, db, settings)
         }
         if (update.action === 'add' && typeof observer.onGroupAdd === 'function') {
-          await observer.onGroupAdd({ sock, ...update, db, settings })
+          await observer.onGroupAdd({ sock,...update, db, settings })
         }
         if (update.action === 'remove' && typeof observer.onGroupRemove === 'function') {
-          await observer.onGroupRemove({ sock, ...update, db, settings })
+          await observer.onGroupRemove({ sock,...update, db, settings })
         }
         if (update.action === 'promote' && typeof observer.onGroupPromote === 'function') {
-          await observer.onGroupPromote({ sock, ...update, db, settings })
+          await observer.onGroupPromote({ sock,...update, db, settings })
         }
         if (update.action === 'demote' && typeof observer.onGroupDemote === 'function') {
-          await observer.onGroupDemote({ sock, ...update, db, settings })
+          await observer.onGroupDemote({ sock,...update, db, settings })
         }
       }
     } catch (e) {
@@ -120,4 +177,6 @@ export function startLoader(sock, db) {
   })
 
   console.log('[LOADER] All observer events bound successfully')
+  console.log('[LOADER] Message listener started')
+  console.log('[LOADER] All events bound successfully')
 }
