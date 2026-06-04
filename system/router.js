@@ -44,7 +44,7 @@ function scanCommands(dir) {
   return results
 }
 
-// === EXPORTED KWA INDEX.JS ===
+// === EXPORTED FOR INDEX.JS ===
 export function loadCommandList() {
   if (!fs.existsSync(pluginPath)) {
     console.log('[ROUTER] Error: No plugins folder found at', pluginPath)
@@ -169,11 +169,11 @@ function buildChannelContext() {
   }
 }
 
-// MAIN COMMAND HANDLER - NO FROMME CHECK
+// MAIN COMMAND HANDLER - NO FROMME CHECK - ALL COMMANDS WORK
 export async function handleCommand(data) {
   const { sock, msg, command, args, isOwner, userLang, sender, isGroup } = data
 
-  console.log(`[ROUTER] Incoming: "${command}" | From: ${sender.split('@')[0]} | Group: ${isGroup}`)
+  console.log(`[ROUTER] Incoming: "${command}" | From: ${sender.split('@')[0]} | Group: ${isGroup} | Owner: ${isOwner}`)
 
   if (commandCache.size === 0) loadCommandList()
 
@@ -210,14 +210,14 @@ export async function handleCommand(data) {
     return sock.sendMessage(sender, {
       image: { url },
       caption: finalCaption,
-...channelContext
+     ...channelContext
     }, { quoted: msg })
   }
 
   // 2. CHECK IF DISABLED
   if (await isCmdDisabled(command)) {
-    const msg = await t(`Command *${command}* is disabled by owner`, userLang)
-    await reply(getBox('error', { text: msg }))
+    const msgText = await t(`Command *${command}* is disabled by owner`, userLang)
+    await reply(getBox('error', { text: msgText }))
     await react('❌')
     console.log(`[ROUTER] Blocked: ${command} is disabled`)
     return true
@@ -228,8 +228,8 @@ export async function handleCommand(data) {
   const senderNum = sender.split('@')[0]
   const isSudo = sudos.includes(senderNum)
   if (cmd.owner &&!isOwner &&!isSudo) {
-    const msg = await t(`Command *${command}* is for owner only`, userLang)
-    await reply(getBox('error', { text: msg }))
+    const msgText = await t(`Command *${command}* is for owner only`, userLang)
+    await reply(getBox('error', { text: msgText }))
     await react('❌')
     console.log(`[ROUTER] Denied: ${command} requires owner`)
     return true
@@ -237,24 +237,24 @@ export async function handleCommand(data) {
 
   // 4. CHECK GROUP/PRIVATE
   if (cmd.group &&!isGroup) {
-    const msg = await t(`Command *${command}* works in groups only`, userLang)
-    await reply(getBox('error', { text: msg }))
+    const msgText = await t(`Command *${command}* works in groups only`, userLang)
+    await reply(getBox('error', { text: msgText }))
     await react('❌')
     console.log(`[ROUTER] Denied: ${command} group-only in DM`)
     return true
   }
 
   if (cmd.private && isGroup) {
-    const msg = await t(`Command *${command}* works in private chat only`, userLang)
-    await reply(getBox('error', { text: msg }))
+    const msgText = await t(`Command *${command}* works in private chat only`, userLang)
+    await reply(getBox('error', { text: msgText }))
     await react('❌')
     console.log(`[ROUTER] Denied: ${command} DM-only in group`)
     return true
   }
 
-  // 5. GLOBAL DATA - ALL PASSED HERE
+  // 5. GLOBAL DATA - ALL POWERS PASSED HERE
   const globalData = {
-...data,
+   ...data,
     reply,
     replyImg,
     react,
@@ -285,7 +285,8 @@ export async function handleCommand(data) {
       autoJoin: getCache('autoJoin') || [],
       sudos: getCache('sudos') || [],
       fontStyle: getCache('fontStyle') || 'normal',
-      boxStyle: getCache('boxStyle') || 1
+      boxStyle: getCache('boxStyle') || 1,
+      ownerJid: getCache('ownerJid') || sock.user.id
     }
   }
 
@@ -298,8 +299,8 @@ export async function handleCommand(data) {
     return true
   } catch (e) {
     console.log(`[ROUTER] Error [${command}]: ${e.message}`)
-    const msg = await t(`Error running command *${command}*`, userLang)
-    await reply(getBox('error', { text: msg, error: e.message }))
+    const msgText = await t(`Error running command *${command}*`, userLang)
+    await reply(getBox('error', { text: msgText, error: e.message }))
     await react('❌')
     return true
   }
