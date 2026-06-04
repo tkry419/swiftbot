@@ -19,15 +19,30 @@ import { getBox } from './theme/box.js'
 import { fancyText } from './theme/fonts.js'
 import { handleCommand } from './system/router.js'
 
-// Import observers
-import antideleteObserver from './observers/antidelete.js'
-import welcomeObserver from './observers/welcome.js'
-import goodbyeObserver from './observers/goodbye.js'
-import antipromoteObserver from './observers/antipromote.js'
-import antidemoteObserver from './observers/antidemote.js'
-
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+
+// SAFE OBSERVER LOADER - IF NOT EXISTS SKIP WITHOUT ERROR
+async function loadObserver(name) {
+  try {
+    const observerPath = join(__dirname, 'observers', `${name}.js`)
+    if (!fs.existsSync(observerPath)) {
+      console.log(`[OBSERVER] ${name}.js not found, skipping`)
+      return null
+    }
+    const module = await import(`file://${observerPath}`)
+    return module.default || null
+  } catch (e) {
+    console.log(`[OBSERVER] Failed to load ${name}:`, e.message)
+    return null
+  }
+}
+
+const antideleteObserver = await loadObserver('antidelete')
+const welcomeObserver = await loadObserver('welcome')
+const goodbyeObserver = await loadObserver('goodbye')
+const antipromoteObserver = await loadObserver('antipromote')
+const antidemoteObserver = await loadObserver('antidemote')
 
 // ENV CONFIG - ONLY THESE 3 ARE ALLOWED FROM ENV
 const SESSION_ID = process.env.SESSION_ID
@@ -163,7 +178,7 @@ async function startBot() {
       const sender = msg.key.remoteJid
       const isGroup = sender.endsWith('@g.us')
 
-      if (antideleteObserver.onMessage) {
+      if (antideleteObserver?.onMessage) {
         await antideleteObserver.onMessage({ msg, sender, isGroup })
       }
 
@@ -204,7 +219,7 @@ async function startBot() {
   // 8. MESSAGE UPDATE LISTENER - FOR ANTIDELETE
   sock.ev.on('messages.update', async (updates) => {
     for (const update of updates) {
-      if (antideleteObserver.onMessageUpdate) {
+      if (antideleteObserver?.onMessageUpdate) {
         await antideleteObserver.onMessageUpdate({ sock, update, settings: getCache })
       }
     }
@@ -218,17 +233,17 @@ async function startBot() {
       const botPic = settings?.botPic || getCache('botPic') || DEFAULT_BOT_PIC
 
       // WELCOME
-      if (action === 'add' && welcomeObserver.onGroupAdd) {
+      if (action === 'add' && welcomeObserver?.onGroupAdd) {
         await welcomeObserver.onGroupAdd({ sock, id, participants, botPic })
       }
 
       // GOODBYE
-      if (action === 'remove' && goodbyeObserver.onGroupRemove) {
+      if (action === 'remove' && goodbyeObserver?.onGroupRemove) {
         await goodbyeObserver.onGroupRemove({ sock, id, participants, botPic })
       }
 
       // ANTI-PROMOTE - ONLY IF BOT ADMIN AND FEATURE ON
-      if (action === 'promote' && antipromoteObserver.onGroupPromote) {
+      if (action === 'promote' && antipromoteObserver?.onGroupPromote) {
         const groupMetadata = await sock.groupMetadata(id)
         const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
         const botIsAdmin = groupMetadata.participants.find(p => p.id === botJid)?.admin
@@ -238,7 +253,7 @@ async function startBot() {
       }
 
       // ANTI-DEMOTE - GLOBAL OR SPECIAL GROUP
-      if (action === 'demote' && antidemoteObserver.onGroupDemote) {
+      if (action === 'demote' && antidemoteObserver?.onGroupDemote) {
         const groupMetadata = await sock.groupMetadata(id)
         const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
         const botIsAdmin = groupMetadata.participants.find(p => p.id === botJid)?.admin
