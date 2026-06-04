@@ -19,6 +19,13 @@ import { getBox } from './theme/box.js'
 import { fancyText } from './theme/fonts.js'
 import { handleCommand } from './system/router.js'
 
+// Import observers
+import antideleteObserver from './observers/antidelete.js'
+import welcomeObserver from './observers/welcome.js'
+import goodbyeObserver from './observers/goodbye.js'
+import antipromoteObserver from './observers/antipromote.js'
+import antidemoteObserver from './observers/antidemote.js'
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
@@ -146,12 +153,21 @@ async function startBot() {
   // 6. CREDS UPDATE
   sock.ev.on('creds.update', saveCreds)
 
-  // 7. MESSAGE LISTENER - HANDLES ALL COMMANDS
+  // 7. MESSAGE LISTENER - HANDLES OBSERVERS + COMMANDS
   sock.ev.on('messages.upsert', async (m) => {
     try {
       const msg = m.messages[0]
-      if (!msg.message || msg.key.fromMe) return
+      if (!msg.message) return
 
+      // 7A. RUN OBSERVERS FIRST - NO FROM ME BLOCK
+      const sender = msg.key.remoteJid
+      const isGroup = sender.endsWith('@g.us')
+
+      if (antideleteObserver.onMessage) {
+        await antideleteObserver.onMessage({ msg, sender, isGroup })
+      }
+
+      // 7B. CHECK COMMAND - ALLOW BOT TO ANSWER ITSELF
       const messageType = Object.keys(msg.message)[0]
       const body = msg.message.conversation ||
                    msg.message.extendedTextMessage?.text ||
@@ -163,9 +179,7 @@ async function startBot() {
 
       const args = body.slice(prefix.length).trim().split(/ +/)
       const command = args.shift().toLowerCase()
-      const sender = msg.key.remoteJid
-      const isGroup = sender.endsWith('@g.us')
-      const senderNum = sender.split('@')[0]
+      const senderNum = (msg.key.participant || sender).split('@')[0]
       const isOwner = senderNum === process.env.OWNER_NUMBER ||
                       getCache('sudos')?.includes(senderNum)
 
@@ -187,7 +201,58 @@ async function startBot() {
     }
   })
 
-  // 8. CONNECTION HANDLER - SAME AS REPO 1
+  // 8. MESSAGE UPDATE LISTENER - FOR ANTIDELETE
+  sock.ev.on('messages.update', async (updates) => {
+    for (const update of updates) {
+      if (antideleteObserver.onMessageUpdate) {
+        await antideleteObserver.onMessageUpdate({ sock, update, settings: getCache })
+      }
+    }
+  })
+
+  // 9. GROUP PARTICIPANTS UPDATE - WELCOME/GOODBYE/ANTI-PROMOTE/ANTI-DEMOTE
+  sock.ev.on('group-participants.update', async (update) => {
+    try {
+      const { id, participants, action } = update
+      const settings = await getSettings()
+      const botPic = settings?.botPic || getCache('botPic') || DEFAULT_BOT_PIC
+
+      // WELCOME
+      if (action === 'add' && welcomeObserver.onGroupAdd) {
+        await welcomeObserver.onGroupAdd({ sock, id, participants, botPic })
+      }
+
+      // GOODBYE
+      if (action === 'remove' && goodbyeObserver.onGroupRemove) {
+        await goodbyeObserver.onGroupRemove({ sock, id, participants, botPic })
+      }
+
+      // ANTI-PROMOTE - ONLY IF BOT ADMIN AND FEATURE ON
+      if (action === 'promote' && antipromoteObserver.onGroupPromote) {
+        const groupMetadata = await sock.groupMetadata(id)
+        const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
+        const botIsAdmin = groupMetadata.participants.find(p => p.id === botJid)?.admin
+        if (botIsAdmin) {
+          await antipromoteObserver.onGroupPromote({ sock, id, participants, settings })
+        }
+      }
+
+      // ANTI-DEMOTE - GLOBAL OR SPECIAL GROUP
+      if (action === 'demote' && antidemoteObserver.onGroupDemote) {
+        const groupMetadata = await sock.groupMetadata(id)
+        const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
+        const botIsAdmin = groupMetadata.participants.find(p => p.id === botJid)?.admin
+        if (botIsAdmin) {
+          await antidemoteObserver.onGroupDemote({ sock, id, participants, settings })
+        }
+      }
+
+    } catch (e) {
+      console.log('[GROUP] Participants update error:', e)
+    }
+  })
+
+  // 10. CONNECTION HANDLER - SAME AS REPO 1
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update
 
