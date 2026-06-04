@@ -44,7 +44,8 @@ function scanCommands(dir) {
   return results
 }
 
-function loadCommandList() {
+// === EXPORTED KWA INDEX.JS ===
+export function loadCommandList() {
   if (!fs.existsSync(pluginPath)) {
     console.log('[ROUTER] Error: No plugins folder found at', pluginPath)
     return
@@ -209,7 +210,7 @@ export async function handleCommand(data) {
     return sock.sendMessage(sender, {
       image: { url },
       caption: finalCaption,
-  ...channelContext
+...channelContext
     }, { quoted: msg })
   }
 
