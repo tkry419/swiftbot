@@ -13,21 +13,51 @@ const __dirname = dirname(__filename)
 const commandCache = new Map()
 const pluginPath = join(__dirname, '..', 'plugins', 'commands')
 
+// RECURSIVE SCAN - SUPPORTS SUBFOLDERS
+function scanCommands(dir) {
+  const results = []
+  if (!fs.existsSync(dir)) return results
+
+  const items = fs.readdirSync(dir, { withFileTypes: true })
+
+  for (const item of items) {
+    const fullPath = join(dir, item.name)
+
+    if (item.isDirectory()) {
+      // Recursively scan subfolders: general/, owner/, settings/
+      results.push(...scanCommands(fullPath))
+    } else if (item.isFile() && item.name.endsWith('.js')) {
+      // Extract command name from file path
+      const relativePath = fullPath.replace(pluginPath + '/', '').replace('.js', '')
+      results.push({ name: relativePath, path: fullPath })
+    }
+  }
+  return results
+}
+
 function loadCommandList() {
   if (!fs.existsSync(pluginPath)) {
     console.log('[ROUTER] No plugins folder found')
     return
   }
-  const files = fs.readdirSync(pluginPath).filter(f => f.endsWith('.js'))
-  console.log(`[ROUTER] Found ${files.length} command files`)
+  const commands = scanCommands(pluginPath)
+  console.log(`[ROUTER] Found ${commands.length} command files in subfolders`)
 }
 
 async function getCommand(cmdName) {
   try {
     if (commandCache.has(cmdName)) return commandCache.get(cmdName)
-    const filePath = join(pluginPath, `${cmdName}.js`)
-    if (!fs.existsSync(filePath)) return null
-    const command = await import(`file://${filePath}?update=${Date.now()}`) // Cache bust
+
+    // Search in all subfolders: general/menu.js, owner/eval.js, etc
+    const allCommands = scanCommands(pluginPath)
+    const cmdFile = allCommands.find(c => c.name === cmdName || c.name.endsWith(`/${cmdName}`))
+
+    if (!cmdFile) {
+      console.log(`[ROUTER] Command file not found: ${cmdName}`)
+      return null
+    }
+
+    const command = await import(`file://${cmdFile.path}?update=${Date.now()}`) // Cache bust
     if (command.default) {
       commandCache.set(cmdName, command.default)
       return command.default
@@ -39,17 +69,17 @@ async function getCommand(cmdName) {
   }
 }
 
-// GLOBAL FONT WRAPPER - INABADILISHA BOT NZIMA
+// GLOBAL FONT WRAPPER - APPLIES TO ENTIRE BOT
 function applyGlobalFont(text) {
   if (!text) return ''
   const globalFont = getCache('fontStyle') || 'normal'
   if (globalFont === 'normal') return text
-  
-  // Badilisha kila character kuwa font ya global
+
+  // Convert each character to global font style
   return text.split('').map(char => {
     // Skip special chars, spaces, newlines
     if (char === '\n' || char === ' ' || char === '\t') return char
-    if (/[^\w\d]/.test(char) && !/[a-zA-Z0-9]/.test(char)) return char
+    if (/[^\w\d]/.test(char) &&!/[a-zA-Z0-9]/.test(char)) return char
     return fancyText(char, globalFont)
   }).join('')
 }
@@ -58,7 +88,7 @@ function applyGlobalFont(text) {
 async function t(text, userLang) {
   const botLang = getCache('botLanguage') || 'en'
   const targetLang = userLang || botLang
-  if (targetLang === 'en' || !text) return text
+  if (targetLang === 'en' ||!text) return text
   if (botLang === 'en' && targetLang === 'en') return text
   try {
     return await translateText(text, targetLang)
@@ -67,14 +97,50 @@ async function t(text, userLang) {
   }
 }
 
+// BUILD CHANNEL CONTEXT - CONTROLLED BY SETTINGS
+function buildChannelContext() {
+  const channelEnabled = getCache('channelEnabled')?? false // DEFAULT OFF
+  const channelJid = getCache('channelJid') || ''
+  const channelName = getCache('channelName') || 'SwiftBot Updates'
+  const channelLink = getCache('channelLink') || 'https://whatsapp.com'
+
+  if (!channelEnabled ||!channelJid) return {}
+
+  return {
+    contextInfo: {
+      forwardingScore: 999,
+      isForwarded: true,
+      externalAdReply: {
+        title: applyGlobalFont(getCache('botName') || 'SwiftBot'),
+        body: applyGlobalFont('SwiftBot WhatsApp Bot'),
+        thumbnailUrl: getCache('botPic'),
+        mediaType: 1,
+        renderLargerThumbnail: false,
+        sourceUrl: channelLink,
+        showAdAttribution: true
+      },
+      forwardedNewsletterMessageInfo: {
+        newsletterJid: channelJid,
+        newsletterName: channelName,
+        serverMessageId: Math.floor(Math.random() * 100000)
+      }
+    }
+  }
+}
+
 // MAIN COMMAND HANDLER
 export async function handleCommand(data) {
   const { sock, msg, command, args, isOwner, userLang, sender, isGroup } = data
 
+  console.log(`[ROUTER] Command received: ${command} from ${sender}`)
+
   if (commandCache.size === 0) loadCommandList()
 
   const cmd = await getCommand(command)
-  if (!cmd) return false
+  if (!cmd) {
+    console.log(`[ROUTER] Command ${command} not found in plugins/commands/`)
+    return false
+  }
 
   // REACT FUNCTION - SAFE
   const react = async (emoji) => {
@@ -91,41 +157,19 @@ export async function handleCommand(data) {
   const reply = async (text) => {
     const translated = await t(text, userLang)
     const finalText = applyGlobalFont(translated)
-    const channelContext = {
-      contextInfo: {
-        externalAdReply: {
-          title: applyGlobalFont(getCache('botName') || 'SwiftBot'),
-          body: applyGlobalFont('SwiftBot WhatsApp Bot'),
-          thumbnailUrl: getCache('botPic'),
-          mediaType: 1,
-          renderLargerThumbnail: false,
-          sourceUrl: getCache('channelLink') || 'https://whatsapp.com'
-        }
-      }
-    }
-    return sock.sendMessage(sender, { text: finalText, ...channelContext }, { quoted: msg })
+    const channelContext = buildChannelContext()
+    return sock.sendMessage(sender, { text: finalText,...channelContext }, { quoted: msg })
   }
 
   // REPLYIMG WRAPPER - PIC + CAPTION + CONTEXT
   const replyImg = async (url, caption) => {
     const translated = await t(caption, userLang)
     const finalCaption = applyGlobalFont(translated)
-    const channelContext = {
-      contextInfo: {
-        externalAdReply: {
-          title: applyGlobalFont(getCache('botName') || 'SwiftBot'),
-          body: applyGlobalFont('SwiftBot WhatsApp Bot'),
-          thumbnailUrl: getCache('botPic'),
-          mediaType: 1,
-          renderLargerThumbnail: false,
-          sourceUrl: getCache('channelLink') || 'https://whatsapp.com'
-        }
-      }
-    }
+    const channelContext = buildChannelContext()
     return sock.sendMessage(sender, {
       image: { url },
       caption: finalCaption,
-      ...channelContext
+    ...channelContext
     }, { quoted: msg })
   }
 
@@ -139,8 +183,9 @@ export async function handleCommand(data) {
 
   // 3. CHECK OWNER ONLY
   const sudos = getCache('sudos') || []
-  const isSudo = sudos.includes(sender)
-  if (cmd.owner && !isOwner && !isSudo) {
+  const senderNum = sender.split('@')[0]
+  const isSudo = sudos.includes(senderNum)
+  if (cmd.owner &&!isOwner &&!isSudo) {
     const msg = await t(`Command *${command}* is for owner only`, userLang)
     await reply(getBox('error', { text: msg }))
     await react('❌')
@@ -148,7 +193,7 @@ export async function handleCommand(data) {
   }
 
   // 4. CHECK GROUP/PRIVATE
-  if (cmd.group && !isGroup) {
+  if (cmd.group &&!isGroup) {
     const msg = await t(`Command *${command}* works in groups only`, userLang)
     await reply(getBox('error', { text: msg }))
     await react('❌')
@@ -162,9 +207,9 @@ export async function handleCommand(data) {
     return true
   }
 
-  // 5. GLOBAL DATA - ZOTE ZINAPITA HAPA
+  // 5. GLOBAL DATA - ALL PASSED HERE
   const globalData = {
-    ...data,
+  ...data,
     reply,
     replyImg,
     react,
@@ -182,11 +227,14 @@ export async function handleCommand(data) {
     },
     settings: {
       botName: getCache('botName') || 'SwiftBot',
-      prefix: getCache('prefix') || '',
+      prefix: getCache('prefix') || '.',
       botLang: getCache('botLanguage') || 'en',
-      publicMode: getCache('publicMode') ?? true,
+      publicMode: getCache('publicMode')?? true,
       fromMeMode: getCache('fromMeMode') || 'off',
-      reactions: getCache('reactions') ?? true,
+      reactions: getCache('reactions')?? true,
+      channelEnabled: getCache('channelEnabled')?? false, // DEFAULT OFF
+      channelJid: getCache('channelJid') || '',
+      channelName: getCache('channelName') || 'SwiftBot Updates',
       channelLink: getCache('channelLink') || 'https://whatsapp.com',
       botPic: getCache('botPic') || 'https://i.ibb.co/S7sRhPFq/IMG-20260601-WA0038.jpg',
       autoJoin: getCache('autoJoin') || [],
@@ -198,6 +246,7 @@ export async function handleCommand(data) {
 
   // 6. RUN COMMAND
   try {
+    console.log(`[ROUTER] Running command: ${command}`)
     await cmd.run(globalData)
     await react('✅')
     return true
@@ -210,29 +259,34 @@ export async function handleCommand(data) {
   }
 }
 
-// GET ALL COMMANDS - KWA .menu
+// GET ALL COMMANDS - FOR.menu - SCANS SUBFOLDERS
 export async function getAllCommands() {
   if (!fs.existsSync(pluginPath)) return []
-  const files = fs.readdirSync(pluginPath).filter(f => f.endsWith('.js'))
+  const allCommands = scanCommands(pluginPath)
   const commands = []
-  for (const file of files) {
-    const cmdName = file.replace('.js', '')
-    const cmd = await getCommand(cmdName)
-    if (cmd && cmd.name) {
-      commands.push({
-        name: cmd.name,
-        desc: cmd.desc || 'No description',
-        category: cmd.category || 'general',
-        owner: cmd.owner || false,
-        group: cmd.group || false,
-        private: cmd.private || false
-      })
+
+  for (const cmdFile of allCommands) {
+    try {
+      const command = await import(`file://${cmdFile.path}?update=${Date.now()}`)
+      const cmd = command.default
+      if (cmd && cmd.name) {
+        commands.push({
+          name: cmd.name,
+          desc: cmd.desc || 'No description',
+          category: cmd.category || cmdFile.name.split('/')[0] || 'general',
+          owner: cmd.owner || false,
+          group: cmd.group || false,
+          private: cmd.private || false
+        })
+      }
+    } catch (e) {
+      console.log(`[ROUTER] Failed to load ${cmdFile.name}:`, e.message)
     }
   }
   return commands
 }
 
-// CLEAR COMMAND CACHE - KWA .reload
+// CLEAR COMMAND CACHE - FOR.reload
 export function clearCommandCache() {
   commandCache.clear()
   console.log('[ROUTER] Command cache cleared')
