@@ -1,21 +1,21 @@
 import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { getCache } from '../system/cache.js'
-import { getSettings } from '../system/db.js'
+import { getCache } from './system/cache.js'
+import { getSettings } from './system/db.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 const observers = []
-const observerPath = join(__dirname, '..', 'plugins', 'observers')
+const observerPath = join(__dirname, 'plugins', 'observers')
 
 // LOAD ALL OBSERVERS DYNAMICALLY - SAFE
 if (fs.existsSync(observerPath)) {
   const files = fs.readdirSync(observerPath).filter(f => f.endsWith('.js'))
   for (const file of files) {
     try {
-      const observer = await import(`../plugins/observers/${file}`)
+      const observer = await import(`./plugins/observers/${file}`)
       if (observer.default) {
         observers.push(observer.default)
         console.log(`[LOADER] Loaded observer: ${file}`)
