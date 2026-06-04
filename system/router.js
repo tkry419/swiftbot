@@ -13,6 +13,15 @@ const __dirname = dirname(__filename)
 const commandCache = new Map()
 const pluginPath = join(__dirname, '..', 'plugins', 'commands')
 
+// ASCII BANNER HELPER
+function printBanner() {
+  const botName = getCache('botName') || 'SwiftBot'
+  const border = '='.repeat(botName.length + 12)
+  console.log('\n' + border)
+  console.log(` ${botName.toUpperCase()} ROUTER`)
+  console.log(border + '\n')
+}
+
 // RECURSIVE SCAN - SUPPORTS SUBFOLDERS
 function scanCommands(dir) {
   const results = []
@@ -37,34 +46,65 @@ function scanCommands(dir) {
 
 function loadCommandList() {
   if (!fs.existsSync(pluginPath)) {
-    console.log('[ROUTER] No plugins folder found')
+    console.log('[ROUTER] Error: No plugins folder found at', pluginPath)
     return
   }
+
+  printBanner()
   const commands = scanCommands(pluginPath)
-  console.log(`[ROUTER] Found ${commands.length} command files in subfolders`)
+
+  if (commands.length === 0) {
+    console.log('[ROUTER] Warning: No command files found')
+    return
+  }
+
+  console.log(`[ROUTER] Discovered ${commands.length} command modules`)
+  console.log('[ROUTER] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+  // Log each command with category grouping
+  const grouped = {}
+  commands.forEach(cmd => {
+    const category = cmd.name.split('/')[0] || 'root'
+    if (!grouped[category]) grouped[category] = []
+    grouped[category].push(cmd.name)
+  })
+
+  Object.keys(grouped).sort().forEach(cat => {
+    console.log(`[ROUTER] [${cat.toUpperCase()}]`)
+    grouped[cat].forEach(cmdName => {
+      console.log(`[ROUTER] • ${cmdName}`)
+    })
+  })
+
+  console.log('[ROUTER] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  console.log('[ROUTER] Command registry initialized\n')
 }
 
 async function getCommand(cmdName) {
   try {
-    if (commandCache.has(cmdName)) return commandCache.get(cmdName)
+    if (commandCache.has(cmdName)) {
+      console.log(`[ROUTER] Cache Hit: ${cmdName}`)
+      return commandCache.get(cmdName)
+    }
 
     // Search in all subfolders: general/menu.js, owner/eval.js, etc
     const allCommands = scanCommands(pluginPath)
     const cmdFile = allCommands.find(c => c.name === cmdName || c.name.endsWith(`/${cmdName}`))
 
     if (!cmdFile) {
-      console.log(`[ROUTER] Command file not found: ${cmdName}`)
+      console.log(`[ROUTER] Command Not Found: ${cmdName}`)
       return null
     }
 
     const command = await import(`file://${cmdFile.path}?update=${Date.now()}`) // Cache bust
     if (command.default) {
       commandCache.set(cmdName, command.default)
+      console.log(`[ROUTER] Loaded: ${cmdName} → ${cmdFile.name}`)
       return command.default
     }
     return null
   } catch (e) {
-    console.log(`[ROUTER] Load command ${cmdName} failed:`, e.message)
+    console.log(`[ROUTER] Load Failed [${cmdName}]: ${e.message}`)
     return null
   }
 }
@@ -128,17 +168,17 @@ function buildChannelContext() {
   }
 }
 
-// MAIN COMMAND HANDLER
+// MAIN COMMAND HANDLER - NO FROMME CHECK
 export async function handleCommand(data) {
   const { sock, msg, command, args, isOwner, userLang, sender, isGroup } = data
 
-  console.log(`[ROUTER] Command received: ${command} from ${sender}`)
+  console.log(`[ROUTER] Incoming: "${command}" | From: ${sender.split('@')[0]} | Group: ${isGroup}`)
 
   if (commandCache.size === 0) loadCommandList()
 
   const cmd = await getCommand(command)
   if (!cmd) {
-    console.log(`[ROUTER] Command ${command} not found in plugins/commands/`)
+    console.log(`[ROUTER] Reject: Unknown command "${command}"`)
     return false
   }
 
@@ -169,7 +209,7 @@ export async function handleCommand(data) {
     return sock.sendMessage(sender, {
       image: { url },
       caption: finalCaption,
-    ...channelContext
+  ...channelContext
     }, { quoted: msg })
   }
 
@@ -178,6 +218,7 @@ export async function handleCommand(data) {
     const msg = await t(`Command *${command}* is disabled by owner`, userLang)
     await reply(getBox('error', { text: msg }))
     await react('❌')
+    console.log(`[ROUTER] Blocked: ${command} is disabled`)
     return true
   }
 
@@ -189,6 +230,7 @@ export async function handleCommand(data) {
     const msg = await t(`Command *${command}* is for owner only`, userLang)
     await reply(getBox('error', { text: msg }))
     await react('❌')
+    console.log(`[ROUTER] Denied: ${command} requires owner`)
     return true
   }
 
@@ -197,6 +239,7 @@ export async function handleCommand(data) {
     const msg = await t(`Command *${command}* works in groups only`, userLang)
     await reply(getBox('error', { text: msg }))
     await react('❌')
+    console.log(`[ROUTER] Denied: ${command} group-only in DM`)
     return true
   }
 
@@ -204,12 +247,13 @@ export async function handleCommand(data) {
     const msg = await t(`Command *${command}* works in private chat only`, userLang)
     await reply(getBox('error', { text: msg }))
     await react('❌')
+    console.log(`[ROUTER] Denied: ${command} DM-only in group`)
     return true
   }
 
   // 5. GLOBAL DATA - ALL PASSED HERE
   const globalData = {
-  ...data,
+...data,
     reply,
     replyImg,
     react,
@@ -232,7 +276,7 @@ export async function handleCommand(data) {
       publicMode: getCache('publicMode')?? true,
       fromMeMode: getCache('fromMeMode') || 'off',
       reactions: getCache('reactions')?? true,
-      channelEnabled: getCache('channelEnabled')?? false, // DEFAULT OFF
+      channelEnabled: getCache('channelEnabled')?? false,
       channelJid: getCache('channelJid') || '',
       channelName: getCache('channelName') || 'SwiftBot Updates',
       channelLink: getCache('channelLink') || 'https://whatsapp.com',
@@ -246,12 +290,13 @@ export async function handleCommand(data) {
 
   // 6. RUN COMMAND
   try {
-    console.log(`[ROUTER] Running command: ${command}`)
+    console.log(`[ROUTER] Executing: ${command}`)
     await cmd.run(globalData)
     await react('✅')
+    console.log(`[ROUTER] Success: ${command} completed`)
     return true
   } catch (e) {
-    console.log(`[ROUTER] Command ${command} error:`, e)
+    console.log(`[ROUTER] Error [${command}]: ${e.message}`)
     const msg = await t(`Error running command *${command}*`, userLang)
     await reply(getBox('error', { text: msg, error: e.message }))
     await react('❌')
@@ -289,5 +334,5 @@ export async function getAllCommands() {
 // CLEAR COMMAND CACHE - FOR.reload
 export function clearCommandCache() {
   commandCache.clear()
-  console.log('[ROUTER] Command cache cleared')
+  console.log('[ROUTER] Command cache purged')
 }
