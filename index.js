@@ -12,40 +12,36 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 
 // Import internal systems
-import { connectDB, getSettings } from './system/db.js'
+import { connectDB, getSettings, isCmdDisabled } from './system/db.js'
 import { initCache, setCache, getCache } from './system/cache.js'
-import { startLoader } from './loader.js'
 import { getBox } from './theme/box.js'
 import { fancyText } from './theme/fonts.js'
-import { loadCommandList } from './system/router.js' // IMPORT ROUTER LOADER
+import { loadCommandList, handleCommand } from './system/router.js' // DIRECT IMPORT
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-// SAFE OBSERVER LOADER - IF NOT EXISTS SKIP WITHOUT ERROR
-async function loadObserver(name) {
-  try {
-    const observerPath = join(__dirname, 'plugins', 'observers', `${name}.js`)
-    if (!fs.existsSync(observerPath)) {
-      console.log(`[OBSERVER] ${name}.js not found, skipping`)
-      return null
+// === DYNAMIC OBSERVER LOADER ===
+const observers = []
+const observerPath = join(__dirname, 'plugins', 'observers')
+
+if (fs.existsSync(observerPath)) {
+  const files = fs.readdirSync(observerPath).filter(f => f.endsWith('.js'))
+  for (const file of files) {
+    try {
+      const observer = await import(`file://${join(observerPath, file)}`)
+      if (observer.default) {
+        observers.push(observer.default)
+        console.log(`[LOADER] Loaded observer: ${file}`)
+      }
+    } catch (e) {
+      console.log(`[LOADER] Failed to load observer ${file}:`, e.message)
     }
-    const module = await import(`file://${observerPath}`)
-    console.log(`[LOADER] Loaded observer: ${name}.js`)
-    return module.default || null
-  } catch (e) {
-    console.log(`[OBSERVER] Failed to load ${name}:`, e.message)
-    return null
   }
+  console.log(`[LOADER] Loaded ${observers.length} observers total`)
+} else {
+  console.log('[LOADER] No observers folder found at plugins/observers/')
 }
-
-const antideleteObserver = await loadObserver('antidelete')
-const welcomeObserver = await loadObserver('welcome')
-const goodbyeObserver = await loadObserver('goodbye')
-const antipromoteObserver = await loadObserver('antipromote')
-const antidemoteObserver = await loadObserver('antidemote')
-
-console.log(`[LOADER] Loaded ${[antideleteObserver, welcomeObserver, goodbyeObserver, antipromoteObserver, antidemoteObserver].filter(Boolean).length} observers total`)
 
 // ENV CONFIG - ONLY THESE 3 ARE ALLOWED FROM ENV
 const SESSION_ID = process.env.SESSION_ID
@@ -56,7 +52,7 @@ const PORT = process.env.PORT || 3000
 // DEFAULTS - NO HARDCODE, COMES FROM DB/RAM
 const DEFAULT_BOT_PIC = 'https://i.ibb.co/S7sRhPFq/IMG-20260601-WA0038.jpg'
 const DEFAULT_BOT_NAME = 'SwiftBot'
-const DEFAULT_AUTO_JOIN = [] // Add JIDs of groups/channels here: ['123@g.us', '123@newsletter']
+const DEFAULT_AUTO_JOIN = []
 
 // VALIDATE SESSION_ID
 if (!SESSION_ID ||!SESSION_ID.startsWith('SWIFTBOT~')) {
@@ -98,10 +94,8 @@ function detectPlatform() {
 // EXPIRE CHECK
 function checkExpire() {
   if (!EXPIRE_DATA) return true
-
   const now = Date.now()
   let expireTime = 0
-
   if (EXPIRE_DATA.includes('D')) {
     const days = parseInt(EXPIRE_DATA.replace('D', ''))
     const startTime = decodedCreds.lastAccountSyncTimestamp || now
@@ -109,7 +103,6 @@ function checkExpire() {
   } else if (EXPIRE_DATA.includes('-')) {
     expireTime = new Date(EXPIRE_DATA).getTime()
   }
-
   if (expireTime && now > expireTime) {
     console.error('[EXPIRE] Bot expired. Contact owner to renew.')
     return false
@@ -156,7 +149,7 @@ async function startBot() {
   const { version } = await fetchLatestBaileysVersion()
   console.log(`[WA] Using WA v${version.join('.')}`)
 
-  // 5. CREATE SOCKET - SAME LOGIC AS REPO 1
+  // 5. CREATE SOCKET
   const sock = makeWASocket({
     version,
     auth: state,
@@ -173,15 +166,127 @@ async function startBot() {
   // 6. CREDS UPDATE
   sock.ev.on('creds.update', saveCreds)
 
-  // 7. CONNECTION HANDLER - SAME AS REPO 1
+  // === 7. ALL EVENTS HANDLED HERE - NO LOADER.JS NEEDED ===
+
+  // 7A. MESSAGES.UPSERT - COMMANDS + OBSERVERS - NO FROMME BLOCK
+  sock.ev.on('messages.upsert', async (m) => {
+    try {
+      const msg = m.messages[0]
+      if (!msg.message) return
+
+      const sender = msg.key.remoteJid
+      const isGroup = sender.endsWith('@g.us')
+      const body = msg.message.conversation ||
+                   msg.message.extendedTextMessage?.text ||
+                   msg.message.imageMessage?.caption ||
+                   msg.message.videoMessage?.caption || ''
+
+      // RUN OBSERVERS onMessage FIRST - NO FROM ME BLOCK
+      for (const observer of observers) {
+        if (typeof observer.onMessage === 'function') {
+          try {
+            await observer.onMessage({ sock, msg, sender, isGroup, db })
+          } catch (e) {
+            console.log(`[OBSERVER ERROR] onMessage:`, e.message)
+          }
+        }
+      }
+
+      // CHECK PREFIX
+      const prefix = getCache('prefix') || '.'
+      if (!body.startsWith(prefix)) return
+
+      // PARSE COMMAND - FULL POWERS
+      const args = body.slice(prefix.length).trim().split(/ +/)
+      const command = args.shift().toLowerCase()
+      const senderNum = (msg.key.participant || sender).split('@')[0]
+      const sudos = getCache('sudos') || []
+      const ownerJid = getCache('ownerJid') || sock.user.id
+      const ownerNum = ownerJid.split('@')[0]
+      const isOwner = senderNum === ownerNum || sudos.includes(senderNum)
+
+      console.log(`[CORE] Command: ${command} from ${senderNum} | Owner: ${isOwner} | Group: ${isGroup}`)
+
+      // CALL ROUTER WITH FULL AUTHORITY
+      await handleCommand({
+        sock,
+        msg,
+        command,
+        args,
+        sender,
+        isGroup,
+        isOwner,
+        userLang: getCache('botLanguage') || 'en',
+        db // FULL DB ACCESS
+      })
+
+    } catch (e) {
+      console.log('[CORE] Message handler error:', e.message)
+    }
+  })
+
+  // 7B. GROUP PARTICIPANTS UPDATE
+  sock.ev.on('group-participants.update', async (update) => {
+    try {
+      const settings = await getSettings()
+      for (const observer of observers) {
+        if (observer.type === 'group' && typeof observer.run === 'function') {
+          await observer.run(sock, update, db, settings)
+        }
+        if (update.action === 'add' && typeof observer.onGroupAdd === 'function') {
+          await observer.onGroupAdd({ sock,...update, db, settings })
+        }
+        if (update.action === 'remove' && typeof observer.onGroupRemove === 'function') {
+          await observer.onGroupRemove({ sock,...update, db, settings })
+        }
+        if (update.action === 'promote' && typeof observer.onGroupPromote === 'function') {
+          await observer.onGroupPromote({ sock,...update, db, settings })
+        }
+        if (update.action === 'demote' && typeof observer.onGroupDemote === 'function') {
+          await observer.onGroupDemote({ sock,...update, db, settings })
+        }
+      }
+    } catch (e) {
+      console.log('[GROUP UPDATE ERROR]:', e.message)
+    }
+  })
+
+  // 7C. MESSAGES UPDATE - ANTIDELETE
+  sock.ev.on('messages.update', async (updates) => {
+    try {
+      const settings = await getSettings()
+      for (const update of updates) {
+        for (const observer of observers) {
+          if (typeof observer.onMessageUpdate === 'function') {
+            await observer.onMessageUpdate({ sock, update, db, settings, getCache })
+          }
+        }
+      }
+    } catch (e) {
+      console.log('[MESSAGE UPDATE ERROR]:', e.message)
+    }
+  })
+
+  // 7D. CONNECTION UPDATE - OBSERVERS + BOT STARTUP
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update
+
+    // Run connection observers
+    for (const observer of observers) {
+      if (observer.type === 'connection' && typeof observer.run === 'function') {
+        try {
+          await observer.run(sock, update, db)
+        } catch (e) {
+          console.log('[CONNECTION OBSERVER ERROR]:', e.message)
+        }
+      }
+    }
 
     if (connection === 'open') {
       console.log('[WA] Connected successfully as', sock.user?.name || sock.user?.id)
       console.log('[WA] Repo 1 connection should be terminated now')
 
-      // Load settings from DB/RAM to cache - BOTNAME and all come from here
+      // Load settings from DB/RAM to cache
       const settings = await getSettings()
       const botName = settings?.botName || DEFAULT_BOT_NAME
       const autoJoin = settings?.autoJoin || DEFAULT_AUTO_JOIN
@@ -190,13 +295,14 @@ async function startBot() {
       setCache('botName', botName)
       setCache('autoJoin', autoJoin)
       setCache('botPic', botPic)
+      setCache('ownerJid', sock.user.id) // SET OWNER JID
 
       if (settings) {
         Object.keys(settings).forEach(key => setCache(key, settings[key]))
         console.log('[CACHE] Settings loaded from DB/RAM')
       }
 
-      // === LOAD COMMANDS ON STARTUP - HII NDO INATOA BANNER ===
+      // LOAD COMMANDS ON STARTUP - BANNER
       loadCommandList()
 
       // AUTO JOIN GROUPS/CHANNELS
@@ -217,7 +323,7 @@ async function startBot() {
         }
       }
 
-      // SEND CONNECTED MESSAGE - WITH BOX + PIC + DYNAMIC DATA
+      // SEND CONNECTED MESSAGE
       try {
         const uptime = Math.floor(process.uptime())
         const connectMsg = getBox('connect', {
@@ -239,34 +345,58 @@ async function startBot() {
         console.log('[WA] Failed to send connect message:', e.message)
       }
 
-      // Start loader - handles additional events including messages.upsert
-      console.log('[LOADER] Binding observer events')
-      startLoader(sock, db)
-      console.log('[LOADER] All observer events bound successfully')
-      console.log('[LOADER] Message listener started')
-      console.log('[LOADER] All events bound successfully')
+      console.log('[CORE] All events bound successfully')
+      console.log('[CORE] Message listener started')
+      console.log('[CORE] Bot ready - NO FROMME BLOCK')
     }
 
     if (connection === 'close') {
       const reason = lastDisconnect?.error?.output?.statusCode
       console.log('[WA] Connection closed. Reason:', reason)
 
-      // CRITICAL: REPO 1 LOGIC - YIELD IF NEW SERVER CONNECTS
       if (reason === DisconnectReason.connectionReplaced) {
         console.log('[WA] Session opened on another server. Yielding to prevent ban.')
         process.exit(0)
       }
 
-      // LOGGED OUT - EXIT
       if (reason === DisconnectReason.loggedOut) {
         console.log('[WA] Logged out. Delete SESSION_ID and regenerate.')
         fs.rmSync(SESSION_DIR, { recursive: true, force: true })
         process.exit(0)
       }
 
-      // OTHER ERRORS - RECONNECT
       console.log('[WA] Reconnecting in 5s...')
       setTimeout(() => startBot(), 5000)
+    }
+  })
+
+  // 7E. CALL EVENTS - ANTI-CALL
+  sock.ev.on('call', async (calls) => {
+    for (const call of calls) {
+      for (const observer of observers) {
+        if (observer.type === 'call' && typeof observer.run === 'function') {
+          try {
+            await observer.run(sock, call, db)
+          } catch (e) {
+            console.log('[CALL OBSERVER ERROR]:', e.message)
+          }
+        }
+      }
+    }
+  })
+
+  // 7F. MESSAGES.REACTION - AUTOREACT
+  sock.ev.on('messages.reaction', async (reactions) => {
+    for (const reaction of reactions) {
+      for (const observer of observers) {
+        if (observer.type === 'reaction' && typeof observer.run === 'function') {
+          try {
+            await observer.run(sock, reaction, db)
+          } catch (e) {
+            console.log('[REACTION OBSERVER ERROR]:', e.message)
+          }
+        }
+      }
     }
   })
 }
