@@ -17,7 +17,7 @@ import { initCache, setCache, getCache } from './system/cache.js'
 import { startLoader } from './loader.js'
 import { getBox } from './theme/box.js'
 import { fancyText } from './theme/fonts.js'
-import { handleCommand } from './system/router.js'
+import { loadCommandList } from './system/router.js' // IMPORT ROUTER LOADER
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -25,12 +25,13 @@ const __dirname = dirname(__filename)
 // SAFE OBSERVER LOADER - IF NOT EXISTS SKIP WITHOUT ERROR
 async function loadObserver(name) {
   try {
-    const observerPath = join(__dirname, 'observers', `${name}.js`)
+    const observerPath = join(__dirname, 'plugins', 'observers', `${name}.js`)
     if (!fs.existsSync(observerPath)) {
       console.log(`[OBSERVER] ${name}.js not found, skipping`)
       return null
     }
     const module = await import(`file://${observerPath}`)
+    console.log(`[LOADER] Loaded observer: ${name}.js`)
     return module.default || null
   } catch (e) {
     console.log(`[OBSERVER] Failed to load ${name}:`, e.message)
@@ -43,6 +44,8 @@ const welcomeObserver = await loadObserver('welcome')
 const goodbyeObserver = await loadObserver('goodbye')
 const antipromoteObserver = await loadObserver('antipromote')
 const antidemoteObserver = await loadObserver('antidemote')
+
+console.log(`[LOADER] Loaded ${[antideleteObserver, welcomeObserver, goodbyeObserver, antipromoteObserver, antidemoteObserver].filter(Boolean).length} observers total`)
 
 // ENV CONFIG - ONLY THESE 3 ARE ALLOWED FROM ENV
 const SESSION_ID = process.env.SESSION_ID
@@ -137,6 +140,7 @@ async function startBot() {
   if (db) {
     console.log('[DB] MongoDB connected')
   } else {
+    console.log('[DB] MONGO_URL not provided. Using RAM Mode')
     console.log('[DB] RAM Mode: Data will reset on restart - Auto controlled')
   }
 
@@ -145,6 +149,7 @@ async function startBot() {
   setCache('startTime', Date.now())
   setCache('platform', detectPlatform())
   setCache('expireData', EXPIRE_DATA)
+  console.log('[CACHE] Initialized')
 
   // 4. LOAD BAILEYS AUTH
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR)
@@ -168,106 +173,7 @@ async function startBot() {
   // 6. CREDS UPDATE
   sock.ev.on('creds.update', saveCreds)
 
-  // 7. MESSAGE LISTENER - HANDLES OBSERVERS + COMMANDS
-  sock.ev.on('messages.upsert', async (m) => {
-    try {
-      const msg = m.messages[0]
-      if (!msg.message) return
-
-      // 7A. RUN OBSERVERS FIRST - NO FROM ME BLOCK
-      const sender = msg.key.remoteJid
-      const isGroup = sender.endsWith('@g.us')
-
-      if (antideleteObserver?.onMessage) {
-        await antideleteObserver.onMessage({ msg, sender, isGroup })
-      }
-
-      // 7B. CHECK COMMAND - ALLOW BOT TO ANSWER ITSELF
-      const messageType = Object.keys(msg.message)[0]
-      const body = msg.message.conversation ||
-                   msg.message.extendedTextMessage?.text ||
-                   msg.message.imageMessage?.caption || ''
-
-      const prefix = getCache('prefix') || '.'
-      const isCmd = body.startsWith(prefix)
-      if (!isCmd) return
-
-      const args = body.slice(prefix.length).trim().split(/ +/)
-      const command = args.shift().toLowerCase()
-      const senderNum = (msg.key.participant || sender).split('@')[0]
-      const isOwner = senderNum === process.env.OWNER_NUMBER ||
-                      getCache('sudos')?.includes(senderNum)
-
-      console.log(`[MSG] Command: ${command} from ${sender}`)
-
-      await handleCommand({
-        sock,
-        msg,
-        command,
-        args,
-        sender,
-        isGroup,
-        isOwner,
-        userLang: getCache('botLanguage') || 'en'
-      })
-
-    } catch (e) {
-      console.log('[MSG] Message handler error:', e)
-    }
-  })
-
-  // 8. MESSAGE UPDATE LISTENER - FOR ANTIDELETE
-  sock.ev.on('messages.update', async (updates) => {
-    for (const update of updates) {
-      if (antideleteObserver?.onMessageUpdate) {
-        await antideleteObserver.onMessageUpdate({ sock, update, settings: getCache })
-      }
-    }
-  })
-
-  // 9. GROUP PARTICIPANTS UPDATE - WELCOME/GOODBYE/ANTI-PROMOTE/ANTI-DEMOTE
-  sock.ev.on('group-participants.update', async (update) => {
-    try {
-      const { id, participants, action } = update
-      const settings = await getSettings()
-      const botPic = settings?.botPic || getCache('botPic') || DEFAULT_BOT_PIC
-
-      // WELCOME
-      if (action === 'add' && welcomeObserver?.onGroupAdd) {
-        await welcomeObserver.onGroupAdd({ sock, id, participants, botPic })
-      }
-
-      // GOODBYE
-      if (action === 'remove' && goodbyeObserver?.onGroupRemove) {
-        await goodbyeObserver.onGroupRemove({ sock, id, participants, botPic })
-      }
-
-      // ANTI-PROMOTE - ONLY IF BOT ADMIN AND FEATURE ON
-      if (action === 'promote' && antipromoteObserver?.onGroupPromote) {
-        const groupMetadata = await sock.groupMetadata(id)
-        const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
-        const botIsAdmin = groupMetadata.participants.find(p => p.id === botJid)?.admin
-        if (botIsAdmin) {
-          await antipromoteObserver.onGroupPromote({ sock, id, participants, settings })
-        }
-      }
-
-      // ANTI-DEMOTE - GLOBAL OR SPECIAL GROUP
-      if (action === 'demote' && antidemoteObserver?.onGroupDemote) {
-        const groupMetadata = await sock.groupMetadata(id)
-        const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
-        const botIsAdmin = groupMetadata.participants.find(p => p.id === botJid)?.admin
-        if (botIsAdmin) {
-          await antidemoteObserver.onGroupDemote({ sock, id, participants, settings })
-        }
-      }
-
-    } catch (e) {
-      console.log('[GROUP] Participants update error:', e)
-    }
-  })
-
-  // 10. CONNECTION HANDLER - SAME AS REPO 1
+  // 7. CONNECTION HANDLER - SAME AS REPO 1
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update
 
@@ -289,6 +195,9 @@ async function startBot() {
         Object.keys(settings).forEach(key => setCache(key, settings[key]))
         console.log('[CACHE] Settings loaded from DB/RAM')
       }
+
+      // === LOAD COMMANDS ON STARTUP - HII NDO INATOA BANNER ===
+      loadCommandList()
 
       // AUTO JOIN GROUPS/CHANNELS
       if (autoJoin.length > 0) {
@@ -330,8 +239,10 @@ async function startBot() {
         console.log('[WA] Failed to send connect message:', e.message)
       }
 
-      // Start loader - handles additional events
+      // Start loader - handles additional events including messages.upsert
+      console.log('[LOADER] Binding observer events')
       startLoader(sock, db)
+      console.log('[LOADER] All observer events bound successfully')
       console.log('[LOADER] Message listener started')
       console.log('[LOADER] All events bound successfully')
     }
