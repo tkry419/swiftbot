@@ -1,4 +1,6 @@
-// 20 DIFFERENT BOX STYLES - HAKUNA ZINAZOFANANA
+import { getCache } from '../system/cache.js'
+
+// 30 DIFFERENT BOX STYLES - HAKUNA ZINAZOFANANA
 const BOX_STYLES = {
   1: {
     name: 'Classic',
@@ -159,12 +161,92 @@ const BOX_STYLES = {
     line: '✨ ',
     title: '━',
     desc: 'Premium sparkle box'
+  },
+  21: {
+    name: 'Shadow',
+    top: '▌│█║▌│█║▌ ',
+    bottom: '▌│█║▌│█║▌',
+    line: '▌│█ ',
+    title: '█',
+    desc: 'Shadow depth box'
+  },
+  22: {
+    name: 'Flame',
+    top: '🔱─⭓ ',
+    bottom: '🔱────────────⭓',
+    line: '🔱 ',
+    title: '─',
+    desc: 'Trident flame box'
+  },
+  23: {
+    name: 'Cloud',
+    top: '☁️─⭓ ',
+    bottom: '☁️────────────⭓',
+    line: '☁️ ',
+    title: '─',
+    desc: 'Cloud sky box'
+  },
+  24: {
+    name: 'Skull',
+    top: '💀━❐ ',
+    bottom: '💀━━━━━━━━━━━━❐',
+    line: '💀 ',
+    title: '━',
+    desc: 'Skull dark box'
+  },
+  25: {
+    name: 'Heart',
+    top: '💖─⭓ ',
+    bottom: '💖────────────⭓',
+    line: '💖 ',
+    title: '─',
+    desc: 'Heart love box'
+  },
+  26: {
+    name: 'Dragon',
+    top: '🐉═❐ ',
+    bottom: '🐉═════════════❐',
+    line: '🐉 ',
+    title: '═',
+    desc: 'Dragon power box'
+  },
+  27: {
+    name: 'Rainbow',
+    top: '🌈─⭓ ',
+    bottom: '🌈────────────⭓',
+    line: '🌈 ',
+    title: '─',
+    desc: 'Rainbow color box'
+  },
+  28: {
+    name: 'Leaf',
+    top: '🍃━⭓ ',
+    bottom: '🍃━━━━━━━━━━━━⭓',
+    line: '🍃 ',
+    title: '━',
+    desc: 'Nature leaf box'
+  },
+  29: {
+    name: 'Ghost',
+    top: '👻─❐ ',
+    bottom: '👻─────────────❐',
+    line: '👻 ',
+    title: '─',
+    desc: 'Ghost spooky box'
+  },
+  30: {
+    name: 'Infinity',
+    top: '♾️━⭓ ',
+    bottom: '♾️━━━━━━━━━━━━⭓',
+    line: '♾️ ',
+    title: '━',
+    desc: 'Infinity endless box'
   }
 }
 
-// GET BOX BY ID OR NAME
+// GET BOX BY ID
 export function getBoxStyle(id) {
-  return BOX_STYLES[id] || BOX_STYLES[1] // Default Classic
+  return BOX_STYLES[id] || BOX_STYLES[1]
 }
 
 // GET ALL BOXES - KWA.boxstats
@@ -173,65 +255,145 @@ export function getAllBoxStyles() {
     id: parseInt(id),
     name: box.name,
     desc: box.desc,
-    preview: `${box.top}Title${box.title}\n${box.line}Content\n${box.bottom}`
+    preview: `${box.top}Title\n${box.line}Content\n${box.bottom}`
   }))
 }
 
-// MAIN BOX GENERATOR - INATUMIA BOX ID KUTOKA DB
+// MAIN BOX GENERATOR - NO HARDCODE
 export function getBox(type, data = {}) {
-  const boxId = getCache('boxStyle') || 1 // Default box 1
+  const boxId = getCache('boxStyle') || 1
   const style = getBoxStyle(boxId)
 
-  // BOX TEMPLATES
+  // DYNAMIC TEMPLATES - YOTE VERTICAL
   const templates = {
-    menu: (d) => `${style.top}${d.botName || 'Bot'}\n${style.line}Prefix: ${d.prefix || 'None'}\n${style.line}${d.commands || ''}\n${style.bottom}`,
-
-    connect: (d) => `${style.top}CONNECTED${style.title}${style.title}\n${style.line}Bot: ${d.botName}\n${style.line}Platform: ${d.platform}\n${style.line}User: ${d.user}\n${style.line}Number: ${d.number}\n${style.line}Uptime: ${d.uptime}\n${style.line}Mode: ${d.mode}\n${style.bottom}`,
-
-    error: (d) => `${style.top}ERROR\n${style.line}${d.text || 'Unknown error'}\n${d.error? `${style.line}Reason: ${d.error}\n` : ''}${style.bottom}`,
-
-    success: (d) => `${style.top}SUCCESS\n${style.line}${d.text || 'Done'}\n${style.bottom}`,
-
-    info: (d) => `${style.top}INFO\n${style.line}${d.text || ''}\n${style.bottom}`,
-
-    warning: (d) => `${style.top}WARNING\n${style.line}${d.text || ''}\n${style.bottom}`,
-
-    stats: (d) => `${style.top}BOT STATS\n${style.line}Name: ${d.name}\n${style.line}Uptime: ${d.uptime}\n${style.line}Users: ${d.users}\n${style.line}Groups: ${d.groups}\n${style.line}Commands: ${d.cmds}\n${style.line}Mode: ${d.mode}\n${style.line}Platform: ${d.platform}\n${style.bottom}`,
-
-    help: (d) => `${style.top}${d.title || 'HELP'}\n${style.line}${d.desc || ''}\n${style.line}Usage: ${d.usage || ''}\n${style.bottom}`,
+    menu: (d) => {
+      let txt = `${style.top}${d.botName || 'BOT'}\n`
+      txt += `${style.line}\n`
+      txt += `${style.line}PREFIX: ${d.prefix || 'None'}\n`
+      txt += `${style.line}MODE: ${d.mode || 'Public'}\n`
+      txt += `${style.line}\n`
+      txt += `${style.line}CATEGORIES:\n`
+      txt += `${style.line}\n`
+      if (d.categories && d.categories.length > 0) {
+        d.categories.forEach(item => {
+          txt += `${style.line}${item}\n`
+        })
+      }
+      txt += `${style.line}\n`
+      txt += `${style.line}TOTAL: ${d.total || 0} COMMANDS\n`
+      txt += `${style.line}\n`
+      txt += `${style.line}${d.usage || ''}\n`
+      txt += `${style.line}${d.example || ''}\n`
+      txt += `${style.bottom}`
+      return txt
+    },
 
     list: (d) => {
       let txt = `${style.top}${d.title || 'LIST'}\n`
+      txt += `${style.line}\n`
       if (d.items && d.items.length > 0) {
-        d.items.forEach((item, i) => {
-          txt += `${style.line}${i + 1}. ${item}\n`
+        d.items.forEach(item => {
+          txt += `${style.line}${item}\n`
         })
       } else {
         txt += `${style.line}No items\n`
       }
-      txt += style.bottom
+      txt += `${style.line}\n`
+      if (d.footer) txt += `${style.line}${d.footer}\n`
+      txt += `${style.bottom}`
+      return txt
+    },
+
+    connect: (d) => {
+      let txt = `${style.top}CONNECTED\n`
+      txt += `${style.line}Bot: ${d.botName || ''}\n`
+      txt += `${style.line}Platform: ${d.platform || ''}\n`
+      txt += `${style.line}User: ${d.user || ''}\n`
+      txt += `${style.line}Number: ${d.number || ''}\n`
+      txt += `${style.line}Uptime: ${d.uptime || ''}\n`
+      txt += `${style.line}Mode: ${d.mode || ''}\n`
+      txt += `${style.bottom}`
+      return txt
+    },
+
+    error: (d) => {
+      let txt = `${style.top}ERROR\n`
+      txt += `${style.line}${d.text || 'Unknown error'}\n`
+      if (d.error) txt += `${style.line}Reason: ${d.error}\n`
+      txt += `${style.bottom}`
+      return txt
+    },
+
+    success: (d) => {
+      let txt = `${style.top}SUCCESS\n`
+      txt += `${style.line}${d.text || 'Done'}\n`
+      txt += `${style.bottom}`
+      return txt
+    },
+
+    info: (d) => {
+      let txt = `${style.top}INFO\n`
+      txt += `${style.line}${d.text || ''}\n`
+      txt += `${style.bottom}`
+      return txt
+    },
+
+    warning: (d) => {
+      let txt = `${style.top}WARNING\n`
+      txt += `${style.line}${d.text || ''}\n`
+      txt += `${style.bottom}`
+      return txt
+    },
+
+    stats: (d) => {
+      let txt = `${style.top}BOT STATS\n`
+      txt += `${style.line}Name: ${d.name || ''}\n`
+      txt += `${style.line}Uptime: ${d.uptime || ''}\n`
+      txt += `${style.line}Users: ${d.users || 0}\n`
+      txt += `${style.line}Groups: ${d.groups || 0}\n`
+      txt += `${style.line}Commands: ${d.cmds || 0}\n`
+      txt += `${style.line}Mode: ${d.mode || ''}\n`
+      txt += `${style.line}Platform: ${d.platform || ''}\n`
+      txt += `${style.bottom}`
+      return txt
+    },
+
+    help: (d) => {
+      let txt = `${style.top}${d.title || 'HELP'}\n`
+      txt += `${style.line}${d.desc || ''}\n`
+      txt += `${style.line}Usage: ${d.usage || ''}\n`
+      txt += `${style.bottom}`
       return txt
     },
 
     boxlist: (d) => {
       let txt = `${style.top}BOX STYLES\n`
+      txt += `${style.line}\n`
       const boxes = getAllBoxStyles()
       boxes.forEach(b => {
-        txt += `${style.line}${b.id}. ${b.name} - ${b.desc}\n`
+        txt += `${style.line}${b.id}. ${b.name}\n`
+        txt += `${style.line} └ ${b.desc}\n`
       })
-      txt += `${style.line}\n${style.line}Current: ${boxId}. ${style.name}\n${style.line}Use:.setbox <id>\n${style.bottom}`
+      txt += `${style.line}\n`
+      txt += `${style.line}Current: ${boxId}. ${style.name}\n`
+      txt += `${style.line}Use:.setbox <id>\n`
+      txt += `${style.bottom}`
+      return txt
+    },
+
+    text: (d) => {
+      let txt = `${style.top}${d.title || ''}\n`
+      txt += `${style.line}${d.text || ''}\n`
+      txt += `${style.bottom}`
       return txt
     }
   }
 
   const template = templates[type]
   if (!template) {
-    // Generic box
+    // Generic fallback
     return `${style.top}${type.toUpperCase()}\n${style.line}${data.text || JSON.stringify(data)}\n${style.bottom}`
   }
 
   return template(data)
 }
-
-// IMPORT getCache FROM cache.js
-import { getCache } from '../system/cache.js'
