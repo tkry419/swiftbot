@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import pino from 'pino'
 import fs from 'fs'
+import express from 'express'
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
@@ -16,20 +17,21 @@ import { initCache, setCache, getCache } from './system/cache.js'
 import { startLoader } from './loader.js'
 import { getBox } from './theme/box.js'
 import { fancyText } from './theme/fonts.js'
+import { handleCommand } from './system/router.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-// ENV CONFIG - ENV RUHSUSIWA TU HIZI 3
+// ENV CONFIG - ONLY THESE 3 ARE ALLOWED FROM ENV
 const SESSION_ID = process.env.SESSION_ID
 const MONGO_URL = process.env.MONGO_URL || null
 const EXPIRE_DATA = process.env.EXPIRE_DATA || null
 const PORT = process.env.PORT || 3000
 
-// DEFAULTS - HAKUNA HARDCODE, ZINATOKA DB/RAM
+// DEFAULTS - NO HARDCODE, COMES FROM DB/RAM
 const DEFAULT_BOT_PIC = 'https://i.ibb.co/S7sRhPFq/IMG-20260601-WA0038.jpg'
 const DEFAULT_BOT_NAME = 'SwiftBot'
-const DEFAULT_AUTO_JOIN = [] // Weka JIDs za groups/channels hapa: ['123@g.us', '123@newsletter']
+const DEFAULT_AUTO_JOIN = [] // Add JIDs of groups/channels here: ['123@g.us', '123@newsletter']
 
 // VALIDATE SESSION_ID
 if (!SESSION_ID ||!SESSION_ID.startsWith('SWIFTBOT~')) {
@@ -90,6 +92,16 @@ function checkExpire() {
   return true
 }
 
+// EXPRESS SERVER FOR RENDER PORT BINDING
+const app = express()
+app.get('/', (req, res) => {
+  res.send('SwiftBot is running ✅')
+})
+
+app.listen(PORT, () => {
+  console.log(`[SERVER] Port ${PORT} opened for Render`)
+})
+
 // MAIN START FUNCTION
 async function startBot() {
   console.log(`==> SwiftBot starting...`)
@@ -117,7 +129,7 @@ async function startBot() {
   const { version } = await fetchLatestBaileysVersion()
   console.log(`[WA] Using WA v${version.join('.')}`)
 
-  // 5. CREATE SOCKET - SAME LOGIC KAMA REPO 1
+  // 5. CREATE SOCKET - SAME LOGIC AS REPO 1
   const sock = makeWASocket({
     version,
     auth: state,
@@ -134,7 +146,48 @@ async function startBot() {
   // 6. CREDS UPDATE
   sock.ev.on('creds.update', saveCreds)
 
-  // 7. CONNECTION HANDLER - SAME KAMA REPO 1
+  // 7. MESSAGE LISTENER - HANDLES ALL COMMANDS
+  sock.ev.on('messages.upsert', async (m) => {
+    try {
+      const msg = m.messages[0]
+      if (!msg.message || msg.key.fromMe) return
+
+      const messageType = Object.keys(msg.message)[0]
+      const body = msg.message.conversation ||
+                   msg.message.extendedTextMessage?.text ||
+                   msg.message.imageMessage?.caption || ''
+
+      const prefix = getCache('prefix') || '.'
+      const isCmd = body.startsWith(prefix)
+      if (!isCmd) return
+
+      const args = body.slice(prefix.length).trim().split(/ +/)
+      const command = args.shift().toLowerCase()
+      const sender = msg.key.remoteJid
+      const isGroup = sender.endsWith('@g.us')
+      const senderNum = sender.split('@')[0]
+      const isOwner = senderNum === process.env.OWNER_NUMBER ||
+                      getCache('sudos')?.includes(senderNum)
+
+      console.log(`[MSG] Command: ${command} from ${sender}`)
+
+      await handleCommand({
+        sock,
+        msg,
+        command,
+        args,
+        sender,
+        isGroup,
+        isOwner,
+        userLang: getCache('botLanguage') || 'en'
+      })
+
+    } catch (e) {
+      console.log('[MSG] Message handler error:', e)
+    }
+  })
+
+  // 8. CONNECTION HANDLER - SAME AS REPO 1
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update
 
@@ -142,7 +195,7 @@ async function startBot() {
       console.log('[WA] Connected successfully as', sock.user?.name || sock.user?.id)
       console.log('[WA] Repo 1 connection should be terminated now')
 
-      // Load settings from DB/RAM to cache - BOTNAME na vyote vinatoka hapa
+      // Load settings from DB/RAM to cache - BOTNAME and all come from here
       const settings = await getSettings()
       const botName = settings?.botName || DEFAULT_BOT_NAME
       const autoJoin = settings?.autoJoin || DEFAULT_AUTO_JOIN
@@ -197,8 +250,10 @@ async function startBot() {
         console.log('[WA] Failed to send connect message:', e.message)
       }
 
-      // Start loader - anashika messages.upsert everything
+      // Start loader - handles additional events
       startLoader(sock, db)
+      console.log('[LOADER] Message listener started')
+      console.log('[LOADER] All events bound successfully')
     }
 
     if (connection === 'close') {
