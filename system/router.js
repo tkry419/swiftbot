@@ -33,10 +33,8 @@ function scanCommands(dir) {
     const fullPath = join(dir, item.name)
 
     if (item.isDirectory()) {
-      // Recursively scan subfolders: general/, owner/, settings/
       results.push(...scanCommands(fullPath))
     } else if (item.isFile() && item.name.endsWith('.js')) {
-      // Extract command name from file path
       const relativePath = fullPath.replace(pluginPath + '/', '').replace('.js', '')
       results.push({ name: relativePath, path: fullPath })
     }
@@ -62,7 +60,6 @@ export function loadCommandList() {
   console.log(`[ROUTER] Discovered ${commands.length} command modules`)
   console.log('[ROUTER] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
-  // Log each command with category grouping
   const grouped = {}
   commands.forEach(cmd => {
     const category = cmd.name.split('/')[0] || 'root'
@@ -88,7 +85,6 @@ async function getCommand(cmdName) {
       return commandCache.get(cmdName)
     }
 
-    // Search in all subfolders: general/menu.js, owner/eval.js, etc
     const allCommands = scanCommands(pluginPath)
     const cmdFile = allCommands.find(c => c.name === cmdName || c.name.endsWith(`/${cmdName}`))
 
@@ -97,7 +93,7 @@ async function getCommand(cmdName) {
       return null
     }
 
-    const command = await import(`file://${cmdFile.path}?update=${Date.now()}`) // Cache bust
+    const command = await import(`file://${cmdFile.path}?update=${Date.now()}`)
     if (command.default) {
       commandCache.set(cmdName, command.default)
       console.log(`[ROUTER] Loaded: ${cmdName} → ${cmdFile.name}`)
@@ -116,9 +112,7 @@ function applyGlobalFont(text) {
   const globalFont = getCache('fontStyle') || 'normal'
   if (globalFont === 'normal') return text
 
-  // Convert each character to global font style
   return text.split('').map(char => {
-    // Skip special chars, spaces, newlines
     if (char === '\n' || char === ' ' || char === '\t') return char
     if (/[^\w\d]/.test(char) &&!/[a-zA-Z0-9]/.test(char)) return char
     return fancyText(char, globalFont)
@@ -140,7 +134,7 @@ async function t(text, userLang) {
 
 // BUILD CHANNEL CONTEXT - CONTROLLED BY SETTINGS
 function buildChannelContext() {
-  const channelEnabled = getCache('channelEnabled')?? false // DEFAULT OFF
+  const channelEnabled = getCache('channelEnabled')?? false
   const channelJid = getCache('channelJid') || ''
   const channelName = getCache('channelName') || 'SwiftBot Updates'
   const channelLink = getCache('channelLink') || 'https://whatsapp.com'
@@ -169,9 +163,9 @@ function buildChannelContext() {
   }
 }
 
-// MAIN COMMAND HANDLER - NO FROMME CHECK - ALL COMMANDS WORK
+// MAIN COMMAND HANDLER - NO FROMME CHECK - NO HARDCODE
 export async function handleCommand(data) {
-  const { sock, msg, command, args, isOwner, userLang, sender, isGroup } = data
+  const { sock, msg, command, args, isOwner, userLang, sender, isGroup, db } = data
 
   console.log(`[ROUTER] Incoming: "${command}" | From: ${sender.split('@')[0]} | Group: ${isGroup} | Owner: ${isOwner}`)
 
@@ -210,7 +204,7 @@ export async function handleCommand(data) {
     return sock.sendMessage(sender, {
       image: { url },
       caption: finalCaption,
-     ...channelContext
+    ...channelContext
     }, { quoted: msg })
   }
 
@@ -252,41 +246,37 @@ export async function handleCommand(data) {
     return true
   }
 
-  // 5. GLOBAL DATA - ALL POWERS PASSED HERE
+  // 5. GLOBAL DATA - ALL POWERS PASSED HERE - NO HARDCODE FALLBACKS
   const globalData = {
-   ...data,
+  ...data,
     reply,
     replyImg,
     react,
-    // BOX WRAPPER - FONT AUTOMATIC
     box: (type, data) => getBox(type, data),
-    // FONT WRAPPER - GLOBAL DEFAULT
-    font: (text, style) => fancyText(text, style || getCache('fontStyle') || 'bold'),
-    // TRANSLATE
+    font: (text, style) => fancyText(text, style || getCache('fontStyle') || 'normal'),
     t: (text) => t(text, userLang),
-    // UPDATE SETTINGS HELPER
     updateSettings: async (key, value) => {
       const result = await updateSettings(key, value)
       if (result) setCache(key, value)
       return result
     },
     settings: {
-      botName: getCache('botName') || 'SwiftBot',
-      prefix: getCache('prefix') || '.',
-      botLang: getCache('botLanguage') || 'en',
-      publicMode: getCache('publicMode')?? true,
-      fromMeMode: getCache('fromMeMode') || 'off',
-      reactions: getCache('reactions')?? true,
-      channelEnabled: getCache('channelEnabled')?? false,
-      channelJid: getCache('channelJid') || '',
-      channelName: getCache('channelName') || 'SwiftBot Updates',
-      channelLink: getCache('channelLink') || 'https://whatsapp.com',
-      botPic: getCache('botPic') || 'https://i.ibb.co/S7sRhPFq/IMG-20260601-WA0038.jpg',
-      autoJoin: getCache('autoJoin') || [],
-      sudos: getCache('sudos') || [],
-      fontStyle: getCache('fontStyle') || 'normal',
-      boxStyle: getCache('boxStyle') || 1,
-      ownerJid: getCache('ownerJid') || sock.user.id
+      botName: getCache('botName'),
+      prefix: getCache('prefix'), // NO FALLBACK - LAZIMA ITOKE DB
+      botLang: getCache('botLanguage'),
+      publicMode: getCache('publicMode'),
+      fromMeMode: getCache('fromMeMode'),
+      reactions: getCache('reactions'),
+      channelEnabled: getCache('channelEnabled'),
+      channelJid: getCache('channelJid'),
+      channelName: getCache('channelName'),
+      channelLink: getCache('channelLink'),
+      botPic: getCache('botPic'),
+      autoJoin: getCache('autoJoin'),
+      sudos: getCache('sudos'),
+      fontStyle: getCache('fontStyle'),
+      boxStyle: getCache('boxStyle'),
+      ownerJid: getCache('ownerJid')
     }
   }
 
