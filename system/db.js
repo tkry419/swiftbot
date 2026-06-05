@@ -13,10 +13,11 @@ let mongoClient = null
 let mongoDB = null
 let useMongo = false
 
-// DEFAULT SETTINGS - HIZI NDIO FALLBACK KAMA DB/RAM HAINA
+// DEFAULT SETTINGS - HIZI NDIO FALLBACK KAMA DB/RAM HAINA - SIO HARDCODED KWA INDEX.JS
 const DEFAULT_SETTINGS = {
+  _id: 'global',
   botName: 'SwiftBot',
-  prefix: '',
+  prefix: '.', // HII NDIO DEFAULT - UNAWEZA KUBADILISHA NA .setprefix
   botLanguage: 'en',
   publicMode: true,
   fromMeMode: 'off',
@@ -31,7 +32,13 @@ const DEFAULT_SETTINGS = {
   antilink: 'off',
   antibadword: 'off',
   autoread: false,
-  autoview: false
+  autoview: false,
+  channelEnabled: false,
+  channelJid: '',
+  channelName: 'SwiftBot Updates',
+  fontStyle: 'normal',
+  boxStyle: 1,
+  ownerJid: ''
 }
 
 // COLLECTIONS ZOTE ZINAZOHITAJIKA
@@ -42,7 +49,7 @@ export async function connectDB(mongoUrl) {
   if (!mongoUrl) {
     console.log('[DB] MONGO_URL not provided. Using RAM Mode')
     useMongo = false
-    ramDB.settings.set('global', DEFAULT_SETTINGS)
+    ramDB.settings.set('global', {...DEFAULT_SETTINGS })
     return null
   }
 
@@ -75,7 +82,7 @@ export async function connectDB(mongoUrl) {
     // Hakikisha settings zipo
     const settings = await mongoDB.collection('settings').findOne({ _id: 'global' })
     if (!settings) {
-      await mongoDB.collection('settings').insertOne({ _id: 'global',...DEFAULT_SETTINGS })
+      await mongoDB.collection('settings').insertOne(DEFAULT_SETTINGS)
       console.log('[DB] Default settings created in MongoDB')
     }
 
@@ -84,21 +91,56 @@ export async function connectDB(mongoUrl) {
     console.log('[DB] MongoDB connection failed:', e.message)
     console.log('[DB] Falling back to RAM Mode')
     useMongo = false
-    ramDB.settings.set('global', DEFAULT_SETTINGS)
+    ramDB.settings.set('global', {...DEFAULT_SETTINGS })
     return null
   }
 }
 
-// GET SETTINGS - DB AU RAM
+// CREATE DEFAULT SETTINGS - INAITWA NA INDEX.JS KAMA HAKUNA
+export async function createDefaultSettings(defaults, db) {
+  try {
+    if (useMongo && mongoDB) {
+      await mongoDB.collection('settings').updateOne(
+        { _id: 'global' },
+        { $set: defaults },
+        { upsert: true }
+      )
+      console.log('[DB] Default settings created in MongoDB')
+      return defaults
+    } else {
+      console.log('[DB] RAM Mode - Using default settings in memory')
+      ramDB.settings.set('global', {...defaults })
+      return defaults
+    }
+  } catch (e) {
+    console.log('[DB] createDefaultSettings error:', e.message)
+    ramDB.settings.set('global', {...defaults })
+    return defaults
+  }
+}
+
+// GET SETTINGS - DB AU RAM - SUPER FALLBACK
 export async function getSettings() {
   try {
     if (useMongo && mongoDB) {
       const data = await mongoDB.collection('settings').findOne({ _id: 'global' })
-      return {...DEFAULT_SETTINGS,...data }
+      if (!data) {
+        console.log('[DB] No settings in Mongo. Creating defaults...')
+        await mongoDB.collection('settings').insertOne(DEFAULT_SETTINGS)
+        return DEFAULT_SETTINGS
+      }
+      return {...DEFAULT_SETTINGS, ...data }
     } else {
-      return {...DEFAULT_SETTINGS,...ramDB.settings.get('global') }
+      const data = ramDB.settings.get('global')
+      if (!data) {
+        console.log('[DB] No settings in RAM. Creating defaults...')
+        ramDB.settings.set('global', {...DEFAULT_SETTINGS })
+        return DEFAULT_SETTINGS
+      }
+      return {...DEFAULT_SETTINGS, ...data }
     }
-  } catch {
+  } catch (e) {
+    console.log('[DB] getSettings error:', e.message)
     return DEFAULT_SETTINGS
   }
 }
@@ -113,7 +155,7 @@ export async function updateSettings(key, value) {
         { upsert: true }
       )
     } else {
-      const current = ramDB.settings.get('global') || {}
+      const current = ramDB.settings.get('global') || {...DEFAULT_SETTINGS }
       current[key] = value
       ramDB.settings.set('global', current)
     }
@@ -281,12 +323,29 @@ export async function getGroup(jid) {
   }
 }
 
-// GET DB STATUS - KWA.botdays
+// GET DB STATUS - KWA .botdays
 export function getDBStatus() {
   return {
-    mode: useMongo? 'MongoDB' : 'RAM',
-    ramUsage: useMongo? 'N/A' : `${ramDB.cache.size} cached msgs, ${ramDB.users.size} users`,
+    mode: useMongo ? 'MongoDB' : 'RAM',
+    ramUsage: useMongo ? 'N/A' : `${ramDB.cache.size} cached msgs, ${ramDB.users.size} users`,
     connected: useMongo
+  }
+}
+
+// LISTEN SETTINGS UPDATES - KWA MONGO TU
+export function listenSettingsUpdates(callback) {
+  if (!useMongo || !mongoDB) {
+    console.log('[DB] listenSettingsUpdates skipped - RAM mode')
+    return
+  }
+  try {
+    const changeStream = mongoDB.collection('settings').watch()
+    changeStream.on('change', async () => {
+      const newSettings = await getSettings()
+      callback(newSettings)
+    })
+  } catch (e) {
+    console.log('[DB] listenSettingsUpdates failed:', e.message)
   }
 }
 
